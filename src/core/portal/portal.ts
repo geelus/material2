@@ -1,8 +1,12 @@
-import {TemplateRef, Type} from 'angular2/core';
-import {ElementRef} from 'angular2/core';
-import {ComponentRef} from 'angular2/core';
-
-import {BaseException} from 'angular2/src/facade/exceptions';
+import {TemplateRef, Type, ViewContainerRef, ElementRef, ComponentRef} from '@angular/core';
+import {
+    MdNullPortalHostError,
+    MdPortalAlreadyAttachedError,
+    MdNoPortalAttachedError,
+    MdNullPortalError,
+    MdPortalHostAlreadyDisposedError,
+    MdUnknownPortalTypeError
+} from './portal-errors';
 
 
 /**
@@ -10,36 +14,36 @@ import {BaseException} from 'angular2/src/facade/exceptions';
  * It can be attach to / detached from a `PortalHost`.
  */
 export abstract class Portal<T> {
-  private attachedHost_: PortalHost;
+  private _attachedHost: PortalHost;
 
   /** Attach this portal to a host. */
   attach(host: PortalHost): Promise<T> {
     if (host == null) {
-      throw new BaseException('Attempting to attach a portal to a null host');
+      throw new MdNullPortalHostError();
     }
 
     if (host.hasAttached()) {
-      throw new BaseException('Host already has a portal attached');
+      throw new MdPortalAlreadyAttachedError();
     }
 
-    this.attachedHost_ = host;
+    this._attachedHost = host;
     return <Promise<T>> host.attach(this);
   }
 
   /** Detach this portal from its host */
   detach(): Promise<void> {
-    let host = this.attachedHost_;
+    let host = this._attachedHost;
     if (host == null) {
-      throw new BaseException('Portal has no host from which to detach');
+      throw new MdNoPortalAttachedError();
     }
 
-    this.attachedHost_ = null;
+    this._attachedHost = null;
     return host.detach();
   }
 
   /** Whether this portal is attached to a host. */
   get isAttached(): boolean {
-    return this.attachedHost_ != null;
+    return this._attachedHost != null;
   }
 
   /**
@@ -47,7 +51,7 @@ export abstract class Portal<T> {
    * the PortalHost when it is performing an `attach()` or `detatch()`.
    */
   setAttachedHost(host: PortalHost) {
-    this.attachedHost_ = host;
+    this._attachedHost = host;
   }
 }
 
@@ -55,7 +59,7 @@ export abstract class Portal<T> {
 /**
  * A `ComponentPortal` is a portal that instantiates some Component upon attachment.
  */
-export class ComponentPortal extends Portal<ComponentRef> {
+export class ComponentPortal extends Portal<ComponentRef<any>> {
   /** The type of the component that will be instantiated for attachment. */
   public component: Type;
 
@@ -64,12 +68,12 @@ export class ComponentPortal extends Portal<ComponentRef> {
    * This is different from where the component *renders*, which is determined by the PortalHost.
    * The origin necessary when the host is outside of the Angular application context.
    */
-  public origin: ElementRef;
+  public viewContainerRef: ViewContainerRef;
 
-  constructor(component: Type, origin: ElementRef = null) {
+  constructor(component: Type, viewContainerRef: ViewContainerRef = null) {
     super();
     this.component = component;
-    this.origin = origin;
+    this.viewContainerRef = viewContainerRef;
   }
 }
 
@@ -79,7 +83,10 @@ export class ComponentPortal extends Portal<ComponentRef> {
  */
 export class TemplatePortal extends Portal<Map<string, any>> {
   /** The embedded template that will be used to instantiate an embedded View in the host. */
-  templateRef: TemplateRef;
+  templateRef: TemplateRef<any>;
+
+  /** Reference to the ViewContainer into which the template will be stamped out. */
+  viewContainerRef: ViewContainerRef;
 
   /**
    * Additional locals for the instantiated embedded view.
@@ -89,9 +96,10 @@ export class TemplatePortal extends Portal<Map<string, any>> {
    */
   locals: Map<string, any> = new Map<string, any>();
 
-  constructor(template: TemplateRef) {
+  constructor(template: TemplateRef<any>, viewContainerRef: ViewContainerRef) {
     super();
     this.templateRef = template;
+    this.viewContainerRef = viewContainerRef;
   }
 
   get origin(): ElementRef {
@@ -130,55 +138,53 @@ export interface PortalHost {
  */
 export abstract class BasePortalHost implements PortalHost {
   /** The portal currently attached to the host. */
-  private attachedPortal_: Portal<any>;
+  private _attachedPortal: Portal<any>;
 
   /** A function that will permanently dispose this host. */
-  private disposeFn_: () => void;
+  private _disposeFn: () => void;
 
   /** Whether this host has already been permanently disposed. */
-  private isDisposed_: boolean = false;
+  private _isDisposed: boolean = false;
 
   /** Whether this host has an attached portal. */
   hasAttached() {
-    return this.attachedPortal_ != null;
+    return this._attachedPortal != null;
   }
 
   attach(portal: Portal<any>): Promise<any> {
     if (portal == null) {
-      throw new BaseException('Must provide a portal to attach');
+      throw new MdNullPortalError();
     }
 
     if (this.hasAttached()) {
-      throw new BaseException('A portal is already attached');
+      throw new MdPortalAlreadyAttachedError();
     }
 
-    if (this.isDisposed_) {
-      throw new BaseException('This PortalHost has already been disposed');
+    if (this._isDisposed) {
+      throw new MdPortalHostAlreadyDisposedError();
     }
 
     if (portal instanceof ComponentPortal) {
-      this.attachedPortal_ = portal;
+      this._attachedPortal = portal;
       return this.attachComponentPortal(portal);
     } else if (portal instanceof TemplatePortal) {
-      this.attachedPortal_ = portal;
+      this._attachedPortal = portal;
       return this.attachTemplatePortal(portal);
     }
 
-    throw new BaseException(
-        'Attempting to attach an unknown Portal type. ' +
-        'BasePortalHost accepts either a ComponentPortal or a TemplatePortal.');
+    throw new MdUnknownPortalTypeError();
   }
 
-  abstract attachComponentPortal(portal: ComponentPortal): Promise<ComponentRef>;
+  abstract attachComponentPortal(portal: ComponentPortal): Promise<ComponentRef<any>>;
 
   abstract attachTemplatePortal(portal: TemplatePortal): Promise<Map<string, any>>;
 
   detach(): Promise<void> {
-    this.attachedPortal_.setAttachedHost(null);
-    this.attachedPortal_ = null;
-    if (this.disposeFn_ != null) {
-      this.disposeFn_();
-      this.disposeFn_ = null;
+    this._attachedPortal.setAttachedHost(null);
+    this._attachedPortal = null;
+    if (this._disposeFn != null) {
+      this._disposeFn();
+      this._disposeFn = null;
     }
 
     return Promise.resolve(null);
@@ -189,10 +195,10 @@ export abstract class BasePortalHost implements PortalHost {
       this.detach();
     }
 
-    this.isDisposed_ = true;
+    this._isDisposed = true;
   }
 
   setDisposeFn(fn: () => void) {
-    this.disposeFn_ = fn;
+    this._disposeFn = fn;
   }
 }
